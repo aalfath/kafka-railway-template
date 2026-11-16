@@ -7,12 +7,14 @@ LOG_DIR="$DATA_ROOT/kraft-data"                   # subfolder: the volume root h
 CONF=/opt/kafka/config/railway-server.properties
 INTERNAL_PORT=9092
 CONTROLLER_PORT=9093
+LOCAL_PORT=9095        # loopback only: inter-broker and the start script's admin calls
 EXTERNAL_PORT=9094
 HEALTH_PORT="${PORT:-8080}"
 SASL_USER="${KAFKA_SASL_USERNAME:-kafka}"
 SASL_PASS="${KAFKA_SASL_PASSWORD:-}"
 PRIVATE_HOST="${RAILWAY_PRIVATE_DOMAIN:-localhost}"
 PUBLIC_HOST="${RAILWAY_TCP_PROXY_DOMAIN:-}"
+PUBLIC_HOST="${PUBLIC_HOST%.}"   # Railway may report the proxy domain with a trailing dot
 PUBLIC_PORT="${RAILWAY_TCP_PROXY_PORT:-}"
 
 export KAFKA_HEAP_OPTS="${KAFKA_HEAP_OPTS:--Xms256m -Xmx1g}"
@@ -31,9 +33,11 @@ if [ ! -s "$DATA_ROOT/cluster-id" ]; then
 fi
 CLUSTER_ID="$(cat "$DATA_ROOT/cluster-id")"
 
-listeners="INTERNAL://:${INTERNAL_PORT},CONTROLLER://localhost:${CONTROLLER_PORT}"
-advertised="INTERNAL://${PRIVATE_HOST}:${INTERNAL_PORT}"
-protocols="INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+# The private domain doesn't resolve inside a deploy until it is live, so the broker talks
+# to itself (and the admin calls below) over a loopback listener.
+listeners="INTERNAL://:${INTERNAL_PORT},LOCAL://127.0.0.1:${LOCAL_PORT},CONTROLLER://localhost:${CONTROLLER_PORT}"
+advertised="INTERNAL://${PRIVATE_HOST}:${INTERNAL_PORT},LOCAL://127.0.0.1:${LOCAL_PORT}"
+protocols="INTERNAL:PLAINTEXT,LOCAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
 if [ -n "$PUBLIC_HOST" ] && [ -n "$PUBLIC_PORT" ]; then
   listeners="${listeners},EXTERNAL://:${EXTERNAL_PORT}"
   advertised="${advertised},EXTERNAL://${PUBLIC_HOST}:${PUBLIC_PORT}"
@@ -52,7 +56,7 @@ controller.listener.names=CONTROLLER
 listeners=${listeners}
 advertised.listeners=${advertised}
 listener.security.protocol.map=${protocols}
-inter.broker.listener.name=INTERNAL
+inter.broker.listener.name=LOCAL
 listener.name.external.sasl.enabled.mechanisms=SCRAM-SHA-256,SCRAM-SHA-512
 listener.name.external.scram-sha-256.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required;
 listener.name.external.scram-sha-512.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required;
@@ -90,11 +94,11 @@ nc -lk -p "$HEALTH_PORT" -e /usr/local/bin/railway-kafka-health &
 # Once the broker answers, create or update the SCRAM user, then mark ready.
 (
   for _ in $(seq 1 120); do
-    if /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server "localhost:${INTERNAL_PORT}" >/dev/null 2>&1; then
+    if /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server "127.0.0.1:${LOCAL_PORT}" >/dev/null 2>&1; then
       if [ -n "$SASL_PASS" ]; then
         ok=1
         for mech in SCRAM-SHA-256 SCRAM-SHA-512; do
-          /opt/kafka/bin/kafka-configs.sh --bootstrap-server "localhost:${INTERNAL_PORT}" --alter \
+          /opt/kafka/bin/kafka-configs.sh --bootstrap-server "127.0.0.1:${LOCAL_PORT}" --alter \
             --add-config "${mech}=[password=${SASL_PASS}]" \
             --entity-type users --entity-name "$SASL_USER" >/dev/null || ok=0
         done
