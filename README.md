@@ -1,3 +1,5 @@
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/apache-kafka-1?utm_medium=integration&utm_source=button&utm_campaign=kafka)
+
 # Apache Kafka on Railway
 
 A single-node [Apache Kafka](https://kafka.apache.org/) 4.4.0 broker for Railway, in KRaft mode (no ZooKeeper), built from the official `apache/kafka` image pinned by digest.
